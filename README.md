@@ -1,33 +1,30 @@
-# fy6900commander
-FY6900 Function Generator Remote via WebSerial
------------------
-**Browser Remote for the FeelTech FY9600 and FY6800 Function Generator. Written entirely in HTML / CSS / Javascript.**
+# FY8300 Commander
 
-Tired of accessing your FY6900 from the horrible user interface on the front? No more suffering! Use this web-based remote control with all the bells and whistles instead.
+A browser-based serial remote for the **FeelTech FY8300** function generator, adapted from the original [FY6900 Commander](https://github.com/katzenjens/fy6900commander).
 
-Read the instructions first. Then click here:
+## Run
 
-https://katzenjens.github.io/fy6900commander/
+1. Open the GitHub Pages URL for this repository (after enabling Pages), or serve this repository from a local web server.
+2. Use a Chromium-based browser with Web Serial support.
+3. Connect the FY8300 over USB serial.
+4. Select the serial device and connect at **115200 baud**.
 
-For newer versions of the FY6900 in case the frequency adjustment has issues click here:
+The interface is a single-page HTML application. No build step or external JavaScript dependencies are required.
 
-https://katzenjens.github.io/fy6900commander/new_version.html
+## FY8300 support status
 
-Feel free to open an issue if your device does not react like it should do since I only tested it with my hardware. Your mileage may vary.
+- CH1, CH2 and CH3 basic waveform, frequency, amplitude, offset write, duty, phase and output controls use the FY8300 Rev. 1.2 command families.
+- Frequency writes are sent as a 14-digit integer count of microhertz.
+- Amplitude readback is scaled by 1000; duty and phase readback by 10.
+- Offset readback is deliberately left as a raw value in the serial log because the Rev. 1.2 document contains inconsistent conversion examples. The entered offset is not overwritten by an uncertain conversion.
+- Modulation is CH1-only in the protocol document.
+- Sweep uses documented commands only. Sweep direction is disabled because the source project’s SMD command is not in FY8300 Rev. 1.2.
+- Arbitrary waveform serial upload is disabled: the FY8300 Rev. 1.2 document does not define the binary upload framing used by the original FY6900 project.
+- Preset save/load remains available, but the protocol describes storing the current two channels; CH3 preset behavior is not confirmed.
+- Modulation STOP is disabled because no corresponding stop command is specified in the protocol document.
 
-----------------
-**Fernbedienung über den Browser zum FY6900 Funktionsgenerator. Geschrieben aussschließlich in HTML / CSS / Javascript.**
+## Important
 
-Schnauze voll von der grausamen Bedienung über das unübersichtliche Bedienfeld des FeelTech FY6900? Euch kann geholfen werden. Nutzt stattdessen dieses praktisch gestaltete Webinterface.
+This is a protocol-based adaptation, **not yet hardware-validated**. Test with outputs disconnected from sensitive equipment and verify each command/readback on your own FY8300 before relying on it. In particular, verify offset readback behavior and the 14-digit frequency representation against the instrument.
 
-Aber erstmal die Anleitung lesen! Danach hier klicken:
-
-https://katzenjens.github.io/fy6900commander/
-
-Neuere Versionen des FY6900 haben eine leicht geänderte Frequenzwahl. 
-
-Dann hier klicken:
-
-https://katzenjens.github.io/fy6900commander/new_version.html
-
-Falls etwas nicht wie erwartet funktionieren sollte, bitte ein Issue öffnen. Ich habe den Kram nur mit meiner Version der Hardware testen können. Die neuere Hardwareversion hat jemand anders getestet. Eigentlich sollte nun alles funktionieren.
+See [FY8300_PROTOCOL_NOTES.md](FY8300_PROTOCOL_NOTES.md) for the documented command map and known ambiguities.
