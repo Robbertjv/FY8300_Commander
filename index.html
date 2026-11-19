@@ -559,10 +559,10 @@
         clearDirty() {
             Dom.all('.dirty').forEach(el => el.classList.remove('dirty'));
         },
-        setChannelDisplay(channel, freq) {
+        setChannelDisplay(channel, freq, force = false) {
             const config = ChannelConfig[channel];
             const input = Dom.byId(config.displayId);
-            if (document.activeElement === input || input.classList.contains('dirty')) return;
+            if (!force && (document.activeElement === input || input.classList.contains('dirty'))) return;
             input.value = Number(freq).toString();
         },
         updatePower(channel, isOn) {
@@ -1001,7 +1001,8 @@
                             const actualHz = Number(Utils.cleanNumeric(response));
                             if (Number.isFinite(actualHz)) {
                                 channelState.freq = actualHz;
-                                UI.setChannelDisplay(channel, actualHz);
+                                UI.setChannelDisplay(channel, actualHz, true);
+                                Dom.byId(config.displayId).classList.remove('dirty');
                                 UI.log('CH' + channel + ' frequency readback: ' + actualHz + ' Hz', 'rx');
                             }
                         } else {
@@ -1037,7 +1038,7 @@
                     const state = App.state['ch' + channel];
                     state.freq = Math.max(0, state.freq + delta * state.step);
                     state.rot += delta * 15;
-                    UI.setChannelDisplay(channel, state.freq);
+                    UI.setChannelDisplay(channel, state.freq, true);
                     knob.style.transform = `rotate(${state.rot}deg)`;
                     Dom.byId(ChannelConfig[channel].displayId).classList.add('dirty');
                 };
