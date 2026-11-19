@@ -852,20 +852,27 @@
                 }
             }
 
-            const amp = await Device.getEngineeringValue(config.ampRead, 1000);
+            const amp = await Device.getEngineeringValue(config.ampRead, 10000);
             if (amp !== null && (!preserveDirty || !Dom.byId(config.ampId).classList.contains('dirty'))) Dom.setValue(config.ampId, amp.toFixed(3));
-            // Offset replies are documented inconsistently (the examples do not
-            // agree with the stated 10000-centred encoding). Only trust decimal volts.
+            // FY8300 Rev. 1.2 offset examples are internally inconsistent:
+            // 611 -> -0.389 V, 16782 -> +6.782 V, while the prose describes a 10000 code centre.
+            // The observed firmware returns 0 for zero offset, so preserve that as 0 V.
             const offsetRaw = await Serial.query(config.offRead);
-            if (offsetRaw && String(offsetRaw).includes('.')) {
-                const offset = Number(Utils.cleanNumeric(offsetRaw));
-                if (Number.isFinite(offset) && (!preserveDirty || !Dom.byId(config.offId).classList.contains('dirty'))) Dom.setValue(config.offId, offset.toFixed(3));
-            } else if (offsetRaw) {
-                UI.log('CH' + channel + ' offset raw readback (conversion needs device confirmation): ' + offsetRaw, 'rx');
+            if (offsetRaw !== '') {
+                const rawText = String(offsetRaw).trim();
+                const raw = Number(Utils.cleanNumeric(rawText));
+                if (Number.isFinite(raw) && (!preserveDirty || !Dom.byId(config.offId).classList.contains('dirty'))) {
+                    let offset;
+                    if (rawText.includes('.')) offset = raw;
+                    else if (raw === 0) offset = 0;
+                    else if (raw < 10000) offset = (raw - 1000) / 1000; // matches 611 -> -0.389 V example
+                    else offset = (raw - 10000) / 1000; // matches 16782 -> +6.782 V example
+                    Dom.setValue(config.offId, offset.toFixed(3));
+                }
             }
-            const duty = await Device.getEngineeringValue(config.dutyRead, 10);
+            const duty = await Device.getEngineeringValue(config.dutyRead, 1000);
             if (duty !== null && (!preserveDirty || !Dom.byId(config.dutyId).classList.contains('dirty'))) Dom.setValue(config.dutyId, duty.toFixed(1));
-            const phase = await Device.getEngineeringValue(config.phaseRead, 10);
+            const phase = await Device.getEngineeringValue(config.phaseRead, 1000);
             if (phase !== null && (!preserveDirty || !Dom.byId(config.phaseId).classList.contains('dirty'))) Dom.setValue(config.phaseId, phase.toFixed(1));
             const powerRaw = parseInt(Utils.cleanNumeric(await Serial.query(config.powerRead)), 10);
             UI.updatePower(channel, powerRaw === 255);
@@ -977,7 +984,8 @@
                 };
                 knob.addEventListener('wheel', event => {
                     event.preventDefault();
-                    applyDelta(event.deltaY > 0 ? -1 : 1);
+                    const notch = Math.max(1, Math.min(3, Math.round(Math.abs(event.deltaY) / 120)));
+                    applyDelta((event.deltaY > 0 ? -1 : 1) * notch);
                     clearTimeout(knob._sendTimer);
                     knob._sendTimer = setTimeout(() => Serial.query(ChannelConfig[channel].freqWrite + Utils.getDeviceFreqString(App.state['ch' + channel].freq)), 120);
                 }, { passive: false });
@@ -988,10 +996,10 @@
                 knob.addEventListener('pointermove', event => {
                     if (!App.knobDrag || App.knobDrag.channel !== channel) return;
                     const dy = App.knobDrag.lastY - event.clientY;
-                    const steps = Math.trunc(dy / 4);
+                    const steps = Math.trunc(dy / 16);
                     if (steps) {
                         applyDelta(steps);
-                        App.knobDrag.lastY -= steps * 4;
+                        App.knobDrag.lastY -= steps * 16;
                         App.knobDrag.moved = true;
                     }
                 });
