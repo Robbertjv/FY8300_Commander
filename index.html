@@ -135,7 +135,7 @@
       FY8300 protocol mode (Rev. 1.2). Offset readback is shown in the log as the raw device value because the protocol examples are inconsistent. Arbitrary-waveform serial upload, sweep direction, and modulation stop are not documented here and are disabled.
     </div>
     <div class="card ch1">
-        <div class="display" id="disp1">0.000'000 Hz</div>
+        <input class="display frequency-input" id="disp1" type="text" inputmode="decimal" aria-label="CH1 frequency in Hz" value="0">
         <div class="controls-area">
             <div class="left-column">
                 <div class="steps">
@@ -167,7 +167,7 @@
     </div>
     
     <div class="card ch2">
-        <div class="display" id="disp2">0.000'000 Hz</div>
+        <input class="display frequency-input" id="disp2" type="text" inputmode="decimal" aria-label="CH2 frequency in Hz" value="0">
         <div class="controls-area">
             <div class="left-column">
                 <div class="steps">
@@ -436,6 +436,7 @@
         queryQueue: Promise.resolve(),
         pollTimer: null,
         pollInProgress: false,
+        frequencyWriteQueue: Promise.resolve(),
         knobDrag: null,
         resolveW: null,
         cmdHistory: [],
@@ -523,8 +524,12 @@
             return parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, "'") + '.' + parts[1].substring(0, 3) + "'" + parts[1].substring(3, 6) + ' Hz';
         },
         getDeviceFreqString(freq) {
-            // FY8300 frequency writes use a 14-digit integer count of microhertz.
-            return Math.round(Number(freq) * 1000000).toString().padStart(14, '0');
+            // Protocol Rev. 1.2 specifies a 14-digit microhertz value.
+            const value = Math.round(Number(freq) * 1000000);
+            if (!Number.isSafeInteger(value) || value < 0 || value > 99999999999999) {
+                throw new Error('Frequency is outside the supported 14-digit microhertz range.');
+            }
+            return value.toString().padStart(14, '0');
         },
         fixed(value, decimals) {
             const n = Number(String(value).trim());
@@ -556,7 +561,9 @@
         },
         setChannelDisplay(channel, freq) {
             const config = ChannelConfig[channel];
-            Dom.byId(config.displayId).innerHTML = Utils.formatFreq(freq);
+            const input = Dom.byId(config.displayId);
+            if (document.activeElement === input || input.classList.contains('dirty')) return;
+            input.value = Number(freq).toString();
         },
         updatePower(channel, isOn) {
             const config = ChannelConfig[channel];
@@ -848,10 +855,11 @@
             const config = ChannelConfig[channel];
             const channelState = App.state['ch' + channel];
             
-            // Fetch frequency and parse it back to a standard float
             const deviceFreq = await Device.getValue(config.freqRead);
-            if (!preserveDirty || !Dom.byId(config.displayId).classList.contains('dirty')) channelState.freq = deviceFreq;
-            UI.setChannelDisplay(channel, channelState.freq);
+            if (!preserveDirty || !Dom.byId(config.displayId).classList.contains('dirty')) {
+                channelState.freq = deviceFreq;
+                UI.setChannelDisplay(channel, channelState.freq);
+            }
 
             if (!preserveDirty || !Dom.byId(config.waveId).classList.contains('dirty')) {
                 if (channel === 1) {
@@ -972,25 +980,43 @@
             UI.updatePower(channel, !isOn);
         },
         async writeFrequency(channel, verify = true) {
-            const config = ChannelConfig[channel];
-            const channelState = App.state['ch' + channel];
-            const commandValue = Utils.getDeviceFreqString(channelState.freq);
-            const command = config.freqWrite + commandValue;
-            UI.log('Frequency write CH' + channel + ': ' + command + ' (target ' + channelState.freq + ' Hz)', 'tx');
-            await Serial.send(command);
-            if (verify) {
-                const response = await Serial.query(config.freqRead);
-                if (response !== '') {
-                    const actualHz = Number(Utils.cleanNumeric(response));
-                    if (Number.isFinite(actualHz)) {
-                        channelState.freq = actualHz;
-                        UI.setChannelDisplay(channel, actualHz);
-                        UI.log('CH' + channel + ' frequency readback: ' + actualHz + ' Hz', 'rx');
-                    }
-                } else {
-                    UI.log('No frequency readback for CH' + channel + '; check command and connection.', 'err');
+            const run = async () => {
+                const config = ChannelConfig[channel];
+                const channelState = App.state['ch' + channel];
+                const commandValue = Utils.getDeviceFreqString(channelState.freq);
+                const command = config.freqWrite + commandValue;
+                const wasPolling = !!App.pollTimer;
+                if (App.pollTimer) {
+                    clearInterval(App.pollTimer);
+                    App.pollTimer = null;
                 }
-            }
+                while (App.pollInProgress) await new Promise(resolve => setTimeout(resolve, 25));
+                try {
+                    UI.log('Frequency write CH' + channel + ': ' + command + ' (target ' + channelState.freq + ' Hz)', 'tx');
+                    await Serial.send(command);
+                    if (verify) {
+                        await new Promise(resolve => setTimeout(resolve, 150));
+                        const response = await Serial.query(config.freqRead);
+                        if (response !== '') {
+                            const actualHz = Number(Utils.cleanNumeric(response));
+                            if (Number.isFinite(actualHz)) {
+                                channelState.freq = actualHz;
+                                UI.setChannelDisplay(channel, actualHz);
+                                UI.log('CH' + channel + ' frequency readback: ' + actualHz + ' Hz', 'rx');
+                            }
+                        } else {
+                            UI.log('No frequency readback for CH' + channel + '; check command and connection.', 'err');
+                        }
+                    }
+                } finally {
+                    if (wasPolling && App.writer && !App.pollTimer) {
+                        App.pollTimer = setInterval(() => Device.pollChannels(), 5000);
+                    }
+                }
+            };
+            const result = App.frequencyWriteQueue.then(run, run);
+            App.frequencyWriteQueue = result.then(() => undefined, () => undefined);
+            return result;
         },
         async adjustFrequency(channel, multiplier) {
             const channelState = App.state['ch' + channel];
@@ -1343,12 +1369,26 @@
         document.addEventListener('input', event => {
             const el = event.target;
             if (!el.dataset) return;
+            if (el.classList.contains('frequency-input')) UI.markDirty(el);
             if (el.dataset.dirty === 'field') UI.markDirty(el);
             if (el.dataset.dirty === 'sweep') Sweep.markDirty();
         });
 
         document.addEventListener('change', event => {
             const el = event.target;
+            if (el.classList.contains('frequency-input')) {
+                const channel = Number(el.id.replace('disp', ''));
+                const value = Number(el.value.trim());
+                if (!Number.isFinite(value) || value < 0) {
+                    el.value = App.state['ch' + channel].freq.toString();
+                    el.classList.remove('dirty');
+                    UI.log('Enter a valid non-negative frequency in Hz.', 'err');
+                    return;
+                }
+                App.state['ch' + channel].freq = value;
+                Device.writeFrequency(channel, true).then(() => el.classList.remove('dirty')).catch(e => UI.log('Frequency write failed: ' + e.message, 'err'));
+                return;
+            }
             if (el.id === 'load-file') {
                 Wave.importBinary(el);
                 return;
@@ -1360,6 +1400,20 @@
         });
 
         Dom.byId('console-input').addEventListener('keydown', DebugTerminal.handleKey);
+        Dom.all('.frequency-input').forEach(input => {
+            input.addEventListener('keydown', event => {
+                if (event.key === 'Enter') {
+                    event.preventDefault();
+                    input.blur();
+                } else if (event.key === 'Escape') {
+                    const channel = Number(input.id.replace('disp', ''));
+                    input.value = App.state['ch' + channel].freq.toString();
+                    input.classList.remove('dirty');
+                    input.blur();
+                }
+            });
+            input.addEventListener('focus', () => input.select());
+        });
     }
 
     Object.defineProperty(window, 'points', {
