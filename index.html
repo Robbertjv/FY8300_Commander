@@ -524,14 +524,13 @@
             return parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, "'") + '.' + parts[1].substring(0, 3) + "'" + parts[1].substring(3, 6) + ' Hz';
         },
         getDeviceFreqString(freq) {
-            // Frequency is sent as an integer number of microhertz.
-            // The protocol examples use variable-length digits (100 Hz -> 100000000),
-            // despite describing a maximum 14-digit field.
-            const value = Math.round(Number(freq) * 1000000);
-            if (!Number.isSafeInteger(value) || value < 0 || value > 99999999999999) {
-                throw new Error('Frequency is outside the supported 14-digit microhertz range.');
+            // Verified on FY8300-30M: WFF13000000.000000 sets 13 MHz.
+            // The generator expects frequency in Hz with six decimal places.
+            const value = Number(freq);
+            if (!Number.isFinite(value) || value < 0) {
+                throw new Error('Frequency must be a valid non-negative number in Hz.');
             }
-            return value.toString();
+            return value.toFixed(6);
         },
         fixed(value, decimals) {
             const n = Number(String(value).trim());
