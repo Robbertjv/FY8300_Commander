@@ -884,6 +884,7 @@
                 if (Number.isFinite(raw) && (!preserveDirty || !Dom.byId(config.offId).classList.contains('dirty'))) {
                     let offset;
                     if (rawText.includes('.')) offset = raw;
+                    else if (raw === 0) offset = 0; // observed firmware readback for zero offset
                     else if (raw < 10000) offset = (raw - 1000) / 1000; // protocol example: 611 -> -0.389 V
                     else offset = (raw - 10000) / 1000; // protocol example: 16782 -> +6.782 V
                     Dom.setValue(config.offId, offset.toFixed(3));
