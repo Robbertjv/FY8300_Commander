@@ -971,11 +971,32 @@
             await Serial.send(ChannelConfig[channel].powerWrite + (isOn ? '0' : '1'));
             UI.updatePower(channel, !isOn);
         },
+        async writeFrequency(channel, verify = true) {
+            const config = ChannelConfig[channel];
+            const channelState = App.state['ch' + channel];
+            const commandValue = Utils.getDeviceFreqString(channelState.freq);
+            const command = config.freqWrite + commandValue;
+            UI.log('Frequency write CH' + channel + ': ' + command + ' (target ' + channelState.freq + ' Hz)', 'tx');
+            await Serial.send(command);
+            if (verify) {
+                const response = await Serial.query(config.freqRead);
+                if (response !== '') {
+                    const actualHz = Number(Utils.cleanNumeric(response));
+                    if (Number.isFinite(actualHz)) {
+                        channelState.freq = actualHz;
+                        UI.setChannelDisplay(channel, actualHz);
+                        UI.log('CH' + channel + ' frequency readback: ' + actualHz + ' Hz', 'rx');
+                    }
+                } else {
+                    UI.log('No frequency readback for CH' + channel + '; check command and connection.', 'err');
+                }
+            }
+        },
         async adjustFrequency(channel, multiplier) {
             const channelState = App.state['ch' + channel];
             channelState.freq = Math.max(0, channelState.freq + (channelState.step * multiplier));
             UI.setChannelDisplay(channel, channelState.freq);
-            await Serial.send(ChannelConfig[channel].freqWrite + Utils.getDeviceFreqString(channelState.freq));
+            await Device.writeFrequency(channel, true);
         },
         setStep(channel, stepValue, button) {
             App.state['ch' + channel].step = stepValue;
@@ -999,7 +1020,7 @@
                     const notch = Math.max(1, Math.min(3, Math.round(Math.abs(event.deltaY) / 120)));
                     applyDelta((event.deltaY > 0 ? -1 : 1) * notch);
                     clearTimeout(knob._sendTimer);
-                    knob._sendTimer = setTimeout(() => Serial.send(ChannelConfig[channel].freqWrite + Utils.getDeviceFreqString(App.state['ch' + channel].freq)), 120);
+                    knob._sendTimer = setTimeout(() => Device.writeFrequency(channel, true), 250);
                 }, { passive: false });
                 knob.addEventListener('pointerdown', event => {
                     App.knobDrag = { channel, lastY: event.clientY, moved: false };
@@ -1019,7 +1040,7 @@
                     if (!App.knobDrag || App.knobDrag.channel !== channel) return;
                     const moved = App.knobDrag.moved;
                     App.knobDrag = null;
-                    if (moved) await Serial.send(ChannelConfig[channel].freqWrite + Utils.getDeviceFreqString(App.state['ch' + channel].freq));
+                    if (moved) await Device.writeFrequency(channel, true);
                 };
                 knob.addEventListener('pointerup', finishDrag);
                 knob.addEventListener('pointercancel', finishDrag);
