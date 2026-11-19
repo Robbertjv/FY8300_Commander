@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>FY6900 Commander v7.27 - Wave Editor & Revision Toggle</title>
+    <title>FY8300 Commander - Three Channel Control</title>
     <style>
         body { background-color: #1a1a1a; color: #ffffff; font-family: 'Segoe UI', Arial, sans-serif; margin: 0; padding: 15px; display: flex; flex-direction: column; align-items: center; }
         header { width: 100%; max-width: 1005px; background: #111; padding: 12px; display: flex; justify-content: space-between; align-items: center; border-radius: 8px; margin-bottom: 20px; border: 1px solid #444; box-sizing: border-box; }
@@ -12,7 +12,7 @@
         .sync { color: #3498db !important; }
         .container { display: flex; gap: 25px; justify-content: center; width: 100%; max-width: 1100px; flex-wrap: wrap; margin-bottom: 15px; }
         .card { background: #252525; border-top: 6px solid #444; border-radius: 12px; padding: 15px; width: 490px; display: flex; flex-direction: column; box-shadow: 0 10px 30px rgba(0,0,0,0.5); box-sizing: border-box; }
-        .ch1 { border-top-color: #f1c40f; } .ch2 { border-top-color: #3498db; }
+        .ch1 { border-top-color: #f1c40f; } .ch2 { border-top-color: #3498db; } .ch3 { border-top-color: #2ecc71; }
         .display { background: #000; color: #fff; font-family: 'Courier New', monospace; font-size: 28px; padding: 12px; text-align: right; border-radius: 6px; margin-bottom: 15px; border: 1px solid #444; letter-spacing: 1px; min-height: 60px; box-sizing: border-box; width: 100%; display: flex; align-items: center; justify-content: flex-end; }
         .controls-area { display: flex; gap: 15px; align-items: flex-start; min-height: 265px; }
         .left-column { flex: 1; }
@@ -30,6 +30,7 @@
         .pwr-btn { width: 95px; height: 38px; border-radius: 6px; border: 2px solid #444; background: #333; color: #666; font-weight: bold; cursor: pointer; font-size: 12px; }
         .on-ch1 { background: #f1c40f !important; color: #000 !important; border-color: #fff !important; }
         .on-ch2 { background: #3498db !important; color: #fff !important; border-color: #fff !important; }
+        .on-ch3 { background: #2ecc71 !important; color: #000 !important; border-color: #fff !important; }
         .set-btn { width: 95px; height: 38px; border-radius: 6px; border: 2px solid #27ae60; background: #1b4d2e; color: #2ecc71; font-weight: bold; cursor: pointer; font-size: 12px; }
         .quick-adj { display: flex; width: 95px; justify-content: space-between; align-items: center; background: #111; border: 1px solid #444; border-radius: 4px; padding: 2px; box-sizing: border-box; }
         .q-btn { background: #333; color: #fff; border: none; border-radius: 3px; width: 26px; height: 26px; cursor: pointer; font-weight: bold; font-size: 14px; display: flex; justify-content: center; align-items: center;}
@@ -121,7 +122,7 @@
 
 <main>
 <header>
-    <div class="app-header-title"><strong>FY6900</strong><span>Commander</span><small id="status-light">Offline</small><span id="device-info"></span></div>
+    <div class="app-header-title"><strong>FY8300</strong><span>Commander</span><small id="status-light">Offline</small><span id="device-info"></span></div>
     <div class="header-actions">
         <button id="refresh-all-btn" data-action="syncFromDevice" class="btn-header btn-refresh">REFRESH ALL</button>
         <button id="connect-btn" data-action="connectSerial" class="btn-header btn-connect">CONNECT SERIAL</button>
@@ -129,7 +130,10 @@
 </header>
 
 <section class="container" aria-labelledby="channels-title">
-    <h1 id="channels-title" class="sr-section-title">FY6900 Commander</h1>
+    <h1 id="channels-title" class="sr-section-title">FY8300 Commander</h1>
+    <div role="note" style="width:100%;max-width:1005px;background:#332b16;border:1px solid #8a6d24;color:#ffe3a0;padding:10px 14px;border-radius:6px;box-sizing:border-box;font-size:12px;margin-bottom:12px;">
+      FY8300 protocol mode (Rev. 1.2). Offset readback is shown in the log as the raw device value because the protocol examples are inconsistent. Arbitrary-waveform serial upload, sweep direction, and modulation stop are not documented here and are disabled.
+    </div>
     <div class="card ch1">
         <div class="display" id="disp1">0.000'000 Hz</div>
         <div class="controls-area">
@@ -414,15 +418,14 @@
 
 <script>
     /*
-     * FY6900 Commander
-     * Refactored single-file edition.
+     * FY8300 Commander - adapted from FY6900 Commander.
+     * Serial protocol based on FeelTech FY8300 Host Computer Communication Protocol Rev. 1.2.
+     * Hardware validation is still required before relying on device control.
      */
 
     // ===== Configuration & State =====
 
-    // Hardware revision handling
-    // "old" = WMF/WFF as integer microhertz, "new" = float hertz
-    var hwVersion = "old";
+    // FY8300 Rev. 1.2 serial protocol; command termination is LF (0x0A).
 
     // Global application state and constants
     const App = {
@@ -441,12 +444,14 @@
         ],
         state: {
             ch1: { freq: 0, step: 1, rot: 0, adjPhas: "0" },
-            ch2: { freq: 0, step: 1, rot: 0 }
+            ch2: { freq: 0, step: 1, rot: 0 },
+            ch3: { freq: 0, step: 1, rot: 0 }
         },
         modState: { mode: 4, source: 0 },
         sweepData: {
             mode: 2,
             obj: 0,
+            enabled: false,
             settings: {
                 0: { start: "1000", stop: "10000", time: "5", scale: "0", dir: "0", unit: "Hz" },
                 1: { start: "1.00", stop: "5.00", time: "5", scale: "0", dir: "0", unit: "V" },
@@ -489,6 +494,12 @@
             powerWrite: 'WFN', freqRead: 'RFF', waveRead: 'RFW', ampRead: 'RFA', offRead: 'RFO', dutyRead: 'RFD',
             phaseRead: 'RFP', powerRead: 'RFN', displayId: 'disp2', waveId: 'wave2', ampId: 'amp2', offId: 'off2',
             dutyId: 'duty2', phaseId: 'phas2', buttonId: 'btn2'
+        },
+        3: {
+            freqWrite: 'TFF', waveWrite: 'TFW', ampWrite: 'TFA', offWrite: 'TFO', dutyWrite: 'TFD', phaseWrite: 'TFP',
+            powerWrite: 'TFN', freqRead: 'RTF', waveRead: 'RTW', ampRead: 'RTA', offRead: 'RTO', dutyRead: 'RTD',
+            phaseRead: 'RTP', powerRead: 'RTN', displayId: 'disp3', waveId: 'wave3', ampId: 'amp3', offId: 'off3',
+            dutyId: 'duty3', phaseId: 'phas3', buttonId: 'btn3'
         }
     };
 
@@ -507,8 +518,13 @@
             return parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, "'") + '.' + parts[1].substring(0, 3) + "'" + parts[1].substring(3, 6) + ' Hz';
         },
         getDeviceFreqString(freq) {
-            if (hwVersion === 'new') return Number(freq).toFixed(6);
+            // FY8300 frequency writes use a 14-digit integer count of microhertz.
             return Math.round(Number(freq) * 1000000).toString().padStart(14, '0');
+        },
+        fixed(value, decimals) {
+            const n = Number(String(value).trim());
+            if (!Number.isFinite(n)) throw new Error('Invalid numeric value: ' + value);
+            return n.toFixed(decimals);
         }
     };
 
@@ -665,10 +681,7 @@
             await Serial.query('SOB' + obj);
         },
         async setDirection(dir, btn) {
-            App.sweepData.settings[App.sweepData.obj].dir = dir;
-            Dom.all('.sw-dir-btn').forEach(b => b.classList.remove('active'));
-            btn.classList.add('active');
-            await Serial.query('SMD' + dir);
+            UI.log('Sweep direction is not defined by FY8300 Rev. 1.2; no command sent.', 'err');
         },
         async sendBatch() {
             Sweep.saveInputs();
@@ -678,31 +691,24 @@
             
             let startVal = parseFloat(Utils.cleanNumeric(current.start) || 0);
             let stopVal = parseFloat(Utils.cleanNumeric(current.stop) || 0);
-            let startValStr = startVal.toString();
-            let stopValStr = stopVal.toString();
-
-            if (App.sweepData.obj === 0) {
-                startValStr = Math.round(startVal).toString().padStart(8, '0');
-                stopValStr = Math.round(stopVal).toString().padStart(8, '0');
-            } else if (App.sweepData.obj === 2) {
-                // BUGFIX: Hardware Offset Shift +12V
-                startValStr = (startVal + 12).toFixed(3);
-                stopValStr = (stopVal + 12).toFixed(3);
-            }
-
-            await Serial.query('SST' + startValStr);
-            await Serial.query('SEN' + stopValStr);
-            
+            const decimals = App.sweepData.obj === 0 ? 1 : (App.sweepData.obj === 3 ? 1 : 3);
+            await Serial.query('SST' + Utils.fixed(current.start, decimals));
+            await Serial.query('SEN' + Utils.fixed(current.stop, decimals));
             if (App.sweepData.mode === 2) {
-                await Serial.query('STI' + Utils.digitsOnly(current.time));
+                await Serial.query('STI' + Utils.fixed(current.time, 1));
                 await Serial.query('SMO' + current.scale);
-                await Serial.query('SMD' + current.dir);
             }
             Dom.byId('sw-set-btn').classList.remove('dirty');
             UI.log('Sweep: Settings pushed.', 'ver');
         },
-        async toggleRun() { await Serial.query('KEY17'); },
-        async returnToNormal() { await Serial.query('WMN1'); }
+        async toggleRun() {
+            App.sweepData.enabled = !App.sweepData.enabled;
+            await Serial.query('SBE' + (App.sweepData.enabled ? '1' : '0'));
+        },
+        async returnToNormal() {
+            App.sweepData.enabled = false;
+            await Serial.query('SBE0');
+        }
     };
 
     // Modulation (AM/FM/PM/etc.) control logic
@@ -738,18 +744,18 @@
             await Serial.query('WPM' + App.modState.source);
             
             if (App.modState.mode === 4) {
-                await Serial.query('WPR' + Math.round(parseFloat(Dom.value('mod-am-val')) || 0));
+                await Serial.query('WPR' + Utils.fixed(Dom.value('mod-am-val'), 1));
             }
             if (App.modState.mode === 5) {
                 const value = parseFloat(Dom.value('mod-dev-val')) || 0;
-                await Serial.query('WFM' + Utils.getDeviceFreqString(value));
+                await Serial.query('WFM' + Utils.fixed(value, 1));
             }
             if (App.modState.mode === 0) {
                 const value = parseFloat(Dom.value('mod-hop-val')) || 0;
-                await Serial.query('WFK' + Utils.getDeviceFreqString(value));
+                await Serial.query('WFK' + Utils.fixed(value, 1));
             }
             if (App.modState.mode === 6) {
-                await Serial.query('WPP' + Utils.digitsOnly(Dom.value('mod-pm-val')));
+                await Serial.query('WPP' + Utils.fixed(Dom.value('mod-pm-val'), 2));
             }
             if (App.modState.mode === 3) {
                 await Serial.query('WPN' + Utils.digitsOnly(Dom.value('mod-burst-val')));
@@ -757,8 +763,7 @@
             UI.setStatus('Connected', 'ready');
         },
         async stop() {
-            await Serial.query('WMN1');
-            UI.setStatus('Connected', 'ready');
+            UI.log('A modulation stop command is not specified in FY8300 Rev. 1.2. No command sent.', 'err');
         }
     };
 
@@ -774,11 +779,13 @@
             UI.updateSyncButton(obj, isTrue);
         },
         async savePreset() {
+            UI.log('FY8300 Rev. 1.2 describes presets as storing the current two channels; CH3 recall is not confirmed.', 'err');
             await Serial.query('USN' + Dom.value('preset-slot'));
         },
         async loadPreset() {
             await Serial.query('ULN' + Dom.value('preset-slot'));
             await Device.syncFromDevice();
+            UI.log('Preset protocol text describes two channels only; CH3 preset behavior is unverified.', 'err');
         },
         updateWaveUI() {
             const wave1 = parseInt(Dom.value('wave1'));
@@ -794,9 +801,11 @@
             if (adjEl) adjEl.disabled = wave1 !== 5;
             if (duty1El) duty1El.disabled = wave1 !== 2 && wave1 !== 4;
 
-            const wave2 = parseInt(Dom.value('wave2'));
-            const duty2El = Dom.byId('duty2');
-            if (duty2El) duty2El.disabled = wave2 !== 2 && wave2 !== 4;
+            [2, 3].forEach(channel => {
+                const wave = parseInt(Dom.value('wave' + channel));
+                const duty = Dom.byId('duty' + channel);
+                if (duty) duty.disabled = wave !== 2 && wave !== 4;
+            });
         },
         async getValue(queryCmd, scale = 1, signed = false) {
             const response = await Serial.query(queryCmd);
@@ -820,11 +829,16 @@
                 Dom.setValue(config.waveId, rawWave < 5 ? rawWave : rawWave + 1);
             }
 
-            Dom.setValue(config.ampId, (await Device.getValue(config.ampRead, 10000)).toFixed(3));
-            Dom.setValue(config.offId, (await Device.getValue(config.offRead, 1000, true)).toFixed(3));
-            Dom.setValue(config.dutyId, (await Device.getValue(config.dutyRead, 1000)).toFixed(3));
-            Dom.setValue(config.phaseId, (await Device.getValue(config.phaseRead, 1000)).toFixed(3));
-            UI.updatePower(channel, (await Serial.query(config.powerRead)) !== '0');
+            // Rev. 1.2 examples: amplitude is in millivolts; duty and phase are tenths.
+            Dom.setValue(config.ampId, (await Device.getValue(config.ampRead, 1000)).toFixed(3));
+            // Offset readback examples in Rev. 1.2 conflict with its stated conversion.
+            // Preserve the user's voltage entry and expose the raw device code in the log.
+            const offsetRaw = await Serial.query(config.offRead);
+            if (offsetRaw) UI.log('CH' + channel + ' offset readback (raw, conversion unresolved): ' + offsetRaw, 'rx');
+            Dom.setValue(config.dutyId, (await Device.getValue(config.dutyRead, 10)).toFixed(1));
+            Dom.setValue(config.phaseId, (await Device.getValue(config.phaseRead, 10)).toFixed(1));
+            const powerRaw = parseInt(Utils.cleanNumeric(await Serial.query(config.powerRead)), 10);
+            UI.updatePower(channel, powerRaw === 255);
         },
         async syncFromDevice() {
             UI.setStatus('Syncing...', 'sync');
@@ -858,21 +872,19 @@
                 if (ids[source]) Modulation.setSource(source, Dom.byId(ids[source]));
             }
 
-            const amResp = Utils.cleanNumeric(await Serial.query('RPR'));
-            Dom.setValue('mod-am-val', amResp ? Math.floor(parseInt(amResp) / 10) : '100');
-
-            // Use standard float parsing for Deviation and HOP
-            Dom.setValue('mod-dev-val', await Device.getValue('RFM'));
-            Dom.setValue('mod-hop-val', await Device.getValue('RFK'));
-
-            const pmResp = Utils.cleanNumeric(await Serial.query('RPP'));
-            Dom.setValue('mod-pm-val', pmResp ? Math.floor(parseInt(pmResp) / 100) : '180');
+            const amResp = await Serial.query('RPR');
+            Dom.setValue('mod-am-val', amResp ? parseFloat(Utils.cleanNumeric(amResp)).toFixed(1) : '100.0');
+            const fmResp = await Serial.query('RFM');
+            Dom.setValue('mod-dev-val', fmResp || '1000');
+            const fskResp = await Serial.query('RFK');
+            Dom.setValue('mod-hop-val', fskResp || '1000');
+            const pmResp = await Serial.query('RPP');
+            Dom.setValue('mod-pm-val', pmResp || '180.00');
             Dom.setValue('mod-burst-val', Utils.cleanNumeric(await Serial.query('RPN')) || '1');
 
             await Device.syncChannel(1);
-            Dom.setValue('trap_rise', await Serial.query('RMH'));
-            Dom.setValue('adj_phas', App.state.ch1.adjPhas);
             await Device.syncChannel(2);
+            await Device.syncChannel(3);
 
             UI.clearDirty();
             UI.setStatus('Connected', 'ready');
@@ -885,21 +897,10 @@
             const waveValue = channel === 1 ? waveLogical : (waveLogical < 5 ? waveLogical : waveLogical - 1);
 
             await Serial.query(config.waveWrite + waveValue);
-            await Serial.query(config.ampWrite + Utils.cleanNumeric(Dom.value(config.ampId)));
-            await Serial.query(config.offWrite + Utils.cleanNumeric(Dom.value(config.offId)));
-            await Serial.query(config.dutyWrite + Utils.cleanNumeric(Dom.value(config.dutyId)));
-            await Serial.query(config.phaseWrite + Utils.cleanNumeric(Dom.value(config.phaseId)));
-
-            if (channel === 1) {
-                if (!Dom.byId('trap_rise').disabled) {
-                    await Serial.query('WMH' + Utils.digitsOnly(Dom.value('trap_rise')));
-                }
-                if (!Dom.byId('adj_phas').disabled) {
-                    const phaseValue = Utils.digitsOnly(Dom.value('adj_phas'));
-                    App.state.ch1.adjPhas = phaseValue;
-                    await Serial.query('WMS' + phaseValue);
-                }
-            }
+            await Serial.query(config.ampWrite + Utils.fixed(Dom.value(config.ampId), 3));
+            await Serial.query(config.offWrite + Utils.fixed(Dom.value(config.offId), 3));
+            await Serial.query(config.dutyWrite + Utils.fixed(Dom.value(config.dutyId), 1));
+            await Serial.query(config.phaseWrite + Utils.fixed(Dom.value(config.phaseId), 1));
             await Device.syncFromDevice();
         },
         async togglePower(channel) {
@@ -920,7 +921,7 @@
             button.classList.add('active');
         },
         setupKnobs() {
-            [1, 2].forEach(channel => {
+            [1, 2, 3].forEach(channel => {
                 const knob = Dom.byId('knob' + channel);
                 knob.addEventListener('wheel', async event => {
                     event.preventDefault();
@@ -1088,6 +1089,8 @@
             input.value = '';
         },
         async startDirectUpload() {
+            UI.log('FY8300 arbitrary waveform upload is not implemented: the Rev. 1.2 protocol does not specify a serial upload frame.', 'err');
+            return;
             if (!App.port || !App.writer) {
                 alert('Please click CONNECT SERIAL at the top first!');
                 return;
@@ -1155,12 +1158,29 @@
             select2.add(new Option('Arb ' + j, 35 + j));
         }
 
+        // Create CH3 from the CH2 card so the original layout and controls stay consistent.
+        const ch3Card = Dom.byId('wave2').closest('.card').cloneNode(true);
+        ch3Card.classList.remove('ch2');
+        ch3Card.classList.add('ch3');
+        ch3Card.querySelectorAll('[id]').forEach(el => { el.id = el.id.replace(/2$/, '3'); });
+        ch3Card.querySelectorAll('[data-channel="2"]').forEach(el => { el.dataset.channel = '3'; });
+        ch3Card.querySelector('.pwr-btn').textContent = 'CH3 OFF';
+        ch3Card.querySelector('select[data-wave-select]').value = '0';
+        Dom.byId('wave2').closest('.card').after(ch3Card);
+        ch3Card.querySelectorAll('.s-btn[data-step]').forEach((btn, i) => btn.classList.toggle('active', i === 2));
+
         const presetSlot = Dom.byId('preset-slot');
         const arbTargetSlot = Dom.byId('arb-target-slot');
         for (let i = 0; i < 20; i++) presetSlot.add(new Option('Slot ' + i, i));
         for (let j = 1; j <= 64; j++) arbTargetSlot.add(new Option('Arb ' + j, j));
 
         Device.setupKnobs();
+        Dom.all('.sw-dir-btn').forEach(btn => { btn.disabled = true; btn.title = 'Not specified by FY8300 Rev. 1.2'; });
+        Dom.byId('btn-upload').disabled = true;
+        Dom.byId('btn-upload').title = 'FY8300 arbitrary waveform serial upload format is not specified by Rev. 1.2';
+        Dom.byId('stop-modulation-btn')?.setAttribute('disabled', 'disabled');
+        const stopMod = document.querySelector('[data-action="stopModulation"]');
+        if (stopMod) { stopMod.disabled = true; stopMod.title = 'No modulation stop command is documented for FY8300 Rev. 1.2'; }
         Sweep.setMode(2, Dom.byId('sw-m-sweep'));
         Sweep.setObject(0, Dom.byId('sw-o-freq'));
         Modulation.updateUI();
