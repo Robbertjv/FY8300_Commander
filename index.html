@@ -201,6 +201,7 @@
     <div class="acc-item" id="mod-acc">
         <div class="acc-header" data-action="toggleAccordion">MODULATION CENTER</div>
         <div class="acc-content">
+            <p style="color:#aaa;font-size:12px;margin:0 0 14px;">This panel configures modulation of <strong>CH1</strong>. “CH2” under Source means the internal CH2 signal is used as the modulation source; it is not a CH2 status/readback panel. The FY8300 Rev. 1.2 protocol documents these modulation controls for CH1 only.</p>
             <div class="tool-grid">
                 <div class="tool-column">
                     <div class="section-label">1. Mode</div>
@@ -217,7 +218,7 @@
                 <div class="tool-column">
                     <div class="section-label">2. Source</div>
                     <div class="btn-stack">
-                        <button class="mod-btn source-btn-item" data-action="setModSource" data-source="0" id="s-ch2">CH2</button>
+                        <button class="mod-btn source-btn-item" data-action="setModSource" data-source="0" id="s-ch2">CH2 (internal)</button>
                         <button class="mod-btn source-btn-item" data-action="setModSource" data-source="1" id="s-extac">VCO / EXT AC</button>
                         <button class="mod-btn source-btn-item" data-action="setModSource" data-source="2" id="s-manu">MANUAL</button>
                         <button class="mod-btn source-btn-item" data-action="setModSource" data-source="3" id="s-extdc">EXT DC</button>
@@ -432,6 +433,10 @@
         port: null,
         writer: null,
         responseResolver: null,
+        queryQueue: Promise.resolve(),
+        pollTimer: null,
+        pollInProgress: false,
+        knobDrag: null,
         resolveW: null,
         cmdHistory: [],
         historyIdx: -1,
@@ -623,20 +628,25 @@
                 UI.log('READ ERROR: ' + e, 'err');
             }
         },
-        async query(cmd) {
-            if (!App.writer) return '';
-            const responsePromise = new Promise(resolve => {
-                App.responseResolver = resolve;
-                setTimeout(() => {
-                    if (App.responseResolver === resolve) {
-                        App.responseResolver = null;
-                        resolve('');
-                    }
-                }, 1000);
-            });
-            UI.log('TX > ' + cmd, 'tx');
-            await App.writer.write(new TextEncoder().encode(cmd + '\n'));
-            return await responsePromise;
+        query(cmd) {
+            const run = async () => {
+                if (!App.writer) return '';
+                const responsePromise = new Promise(resolve => {
+                    App.responseResolver = resolve;
+                    setTimeout(() => {
+                        if (App.responseResolver === resolve) {
+                            App.responseResolver = null;
+                            resolve('');
+                        }
+                    }, 1000);
+                });
+                UI.log('TX > ' + cmd, 'tx');
+                await App.writer.write(new TextEncoder().encode(cmd + '\n'));
+                return await responsePromise;
+            };
+            const result = App.queryQueue.then(run, run);
+            App.queryQueue = result.then(() => undefined, () => undefined);
+            return result;
         }
     };
 
@@ -814,31 +824,62 @@
             if (signed && value > 2147483647) value -= 4294967296;
             return value / scale;
         },
-        async syncChannel(channel) {
+        async getEngineeringValue(queryCmd, integerScale) {
+            const response = await Serial.query(queryCmd);
+            if (!response) return null;
+            const clean = Utils.cleanNumeric(response);
+            const value = Number(clean);
+            if (!Number.isFinite(value)) return null;
+            // FY8300 examples return integer milli-units/tenths; some firmware builds
+            // may return an already formatted decimal. Never scale a decimal twice.
+            return clean.includes('.') ? value : value / integerScale;
+        },
+        async syncChannel(channel, preserveDirty = false) {
             const config = ChannelConfig[channel];
             const channelState = App.state['ch' + channel];
             
             // Fetch frequency and parse it back to a standard float
-            channelState.freq = await Device.getValue(config.freqRead);
+            const deviceFreq = await Device.getValue(config.freqRead);
+            if (!preserveDirty || !Dom.byId(config.displayId).classList.contains('dirty')) channelState.freq = deviceFreq;
             UI.setChannelDisplay(channel, channelState.freq);
 
-            if (channel === 1) {
-                Dom.setValue(config.waveId, await Device.getValue(config.waveRead));
-            } else {
-                const rawWave = await Device.getValue(config.waveRead);
-                Dom.setValue(config.waveId, rawWave < 5 ? rawWave : rawWave + 1);
+            if (!preserveDirty || !Dom.byId(config.waveId).classList.contains('dirty')) {
+                if (channel === 1) {
+                    Dom.setValue(config.waveId, await Device.getValue(config.waveRead));
+                } else {
+                    const rawWave = await Device.getValue(config.waveRead);
+                    Dom.setValue(config.waveId, rawWave < 5 ? rawWave : rawWave + 1);
+                }
             }
 
-            // Rev. 1.2 examples: amplitude is in millivolts; duty and phase are tenths.
-            Dom.setValue(config.ampId, (await Device.getValue(config.ampRead, 1000)).toFixed(3));
-            // Offset readback examples in Rev. 1.2 conflict with its stated conversion.
-            // Preserve the user's voltage entry and expose the raw device code in the log.
+            const amp = await Device.getEngineeringValue(config.ampRead, 1000);
+            if (amp !== null && (!preserveDirty || !Dom.byId(config.ampId).classList.contains('dirty'))) Dom.setValue(config.ampId, amp.toFixed(3));
+            // Offset replies are documented inconsistently (the examples do not
+            // agree with the stated 10000-centred encoding). Only trust decimal volts.
             const offsetRaw = await Serial.query(config.offRead);
-            if (offsetRaw) UI.log('CH' + channel + ' offset readback (raw, conversion unresolved): ' + offsetRaw, 'rx');
-            Dom.setValue(config.dutyId, (await Device.getValue(config.dutyRead, 10)).toFixed(1));
-            Dom.setValue(config.phaseId, (await Device.getValue(config.phaseRead, 10)).toFixed(1));
+            if (offsetRaw && String(offsetRaw).includes('.')) {
+                const offset = Number(Utils.cleanNumeric(offsetRaw));
+                if (Number.isFinite(offset) && (!preserveDirty || !Dom.byId(config.offId).classList.contains('dirty'))) Dom.setValue(config.offId, offset.toFixed(3));
+            } else if (offsetRaw) {
+                UI.log('CH' + channel + ' offset raw readback (conversion needs device confirmation): ' + offsetRaw, 'rx');
+            }
+            const duty = await Device.getEngineeringValue(config.dutyRead, 10);
+            if (duty !== null && (!preserveDirty || !Dom.byId(config.dutyId).classList.contains('dirty'))) Dom.setValue(config.dutyId, duty.toFixed(1));
+            const phase = await Device.getEngineeringValue(config.phaseRead, 10);
+            if (phase !== null && (!preserveDirty || !Dom.byId(config.phaseId).classList.contains('dirty'))) Dom.setValue(config.phaseId, phase.toFixed(1));
             const powerRaw = parseInt(Utils.cleanNumeric(await Serial.query(config.powerRead)), 10);
             UI.updatePower(channel, powerRaw === 255);
+        },
+        async pollChannels() {
+            if (!App.writer || App.pollInProgress) return;
+            App.pollInProgress = true;
+            try {
+                for (const channel of [1, 2, 3]) await Device.syncChannel(channel, true);
+            } catch (e) {
+                UI.log('Live refresh error: ' + e.message, 'err');
+            } finally {
+                App.pollInProgress = false;
+            }
         },
         async syncFromDevice() {
             UI.setStatus('Syncing...', 'sync');
@@ -887,6 +928,8 @@
             await Device.syncChannel(3);
 
             UI.clearDirty();
+            if (App.pollTimer) clearInterval(App.pollTimer);
+            App.pollTimer = setInterval(() => Device.pollChannels(), 5000);
             UI.setStatus('Connected', 'ready');
             Device.updateWaveUI();
         },
@@ -923,16 +966,43 @@
         setupKnobs() {
             [1, 2, 3].forEach(channel => {
                 const knob = Dom.byId('knob' + channel);
-                knob.addEventListener('wheel', async event => {
+                if (!knob) return;
+                const applyDelta = delta => {
+                    const state = App.state['ch' + channel];
+                    state.freq = Math.max(0, state.freq + delta * state.step);
+                    state.rot += delta * 15;
+                    UI.setChannelDisplay(channel, state.freq);
+                    knob.style.transform = `rotate(${state.rot}deg)`;
+                    Dom.byId(ChannelConfig[channel].displayId).classList.add('dirty');
+                };
+                knob.addEventListener('wheel', event => {
                     event.preventDefault();
-                    const delta = event.deltaY > 0 ? -1 : 1;
-                    const channelState = App.state['ch' + channel];
-                    channelState.freq = Math.max(0, channelState.freq + (delta * channelState.step));
-                    UI.setChannelDisplay(channel, channelState.freq);
-                    channelState.rot += delta * 15;
-                    knob.style.transform = `rotate(${channelState.rot}deg)`;
-                    await Serial.query(ChannelConfig[channel].freqWrite + Utils.getDeviceFreqString(channelState.freq));
+                    applyDelta(event.deltaY > 0 ? -1 : 1);
+                    clearTimeout(knob._sendTimer);
+                    knob._sendTimer = setTimeout(() => Serial.query(ChannelConfig[channel].freqWrite + Utils.getDeviceFreqString(App.state['ch' + channel].freq)), 120);
                 }, { passive: false });
+                knob.addEventListener('pointerdown', event => {
+                    App.knobDrag = { channel, lastY: event.clientY, moved: false };
+                    knob.setPointerCapture(event.pointerId);
+                });
+                knob.addEventListener('pointermove', event => {
+                    if (!App.knobDrag || App.knobDrag.channel !== channel) return;
+                    const dy = App.knobDrag.lastY - event.clientY;
+                    const steps = Math.trunc(dy / 4);
+                    if (steps) {
+                        applyDelta(steps);
+                        App.knobDrag.lastY -= steps * 4;
+                        App.knobDrag.moved = true;
+                    }
+                });
+                const finishDrag = async () => {
+                    if (!App.knobDrag || App.knobDrag.channel !== channel) return;
+                    const moved = App.knobDrag.moved;
+                    App.knobDrag = null;
+                    if (moved) await Serial.query(ChannelConfig[channel].freqWrite + Utils.getDeviceFreqString(App.state['ch' + channel].freq));
+                };
+                knob.addEventListener('pointerup', finishDrag);
+                knob.addEventListener('pointercancel', finishDrag);
             });
         }
     };
