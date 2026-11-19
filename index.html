@@ -524,12 +524,14 @@
             return parts[0].replace(/\B(?=(\d{3})+(?!\d))/g, "'") + '.' + parts[1].substring(0, 3) + "'" + parts[1].substring(3, 6) + ' Hz';
         },
         getDeviceFreqString(freq) {
-            // Protocol Rev. 1.2 specifies a 14-digit microhertz value.
+            // Frequency is sent as an integer number of microhertz.
+            // The protocol examples use variable-length digits (100 Hz -> 100000000),
+            // despite describing a maximum 14-digit field.
             const value = Math.round(Number(freq) * 1000000);
             if (!Number.isSafeInteger(value) || value < 0 || value > 99999999999999) {
                 throw new Error('Frequency is outside the supported 14-digit microhertz range.');
             }
-            return value.toString().padStart(14, '0');
+            return value.toString();
         },
         fixed(value, decimals) {
             const n = Number(String(value).trim());
@@ -882,9 +884,8 @@
                 if (Number.isFinite(raw) && (!preserveDirty || !Dom.byId(config.offId).classList.contains('dirty'))) {
                     let offset;
                     if (rawText.includes('.')) offset = raw;
-                    else if (raw === 0) offset = 0;
-                    else if (raw < 10000) offset = (raw - 1000) / 1000; // matches 611 -> -0.389 V example
-                    else offset = (raw - 10000) / 1000; // matches 16782 -> +6.782 V example
+                    else if (raw < 10000) offset = (raw - 1000) / 1000; // protocol example: 611 -> -0.389 V
+                    else offset = (raw - 10000) / 1000; // protocol example: 16782 -> +6.782 V
                     Dom.setValue(config.offId, offset.toFixed(3));
                 }
             }
@@ -1413,7 +1414,10 @@
                     input.blur();
                 }
             });
-            input.addEventListener('focus', () => input.select());
+            input.addEventListener('focus', () => {
+                input.classList.add('dirty');
+                input.select();
+            });
         });
     }
 
