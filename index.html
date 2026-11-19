@@ -628,6 +628,16 @@
                 UI.log('READ ERROR: ' + e, 'err');
             }
         },
+        send(cmd) {
+            const run = async () => {
+                if (!App.writer) return;
+                UI.log('TX > ' + cmd, 'tx');
+                await App.writer.write(new TextEncoder().encode(cmd + '\n'));
+            };
+            const result = App.queryQueue.then(run, run);
+            App.queryQueue = result.then(() => undefined, () => undefined);
+            return result;
+        },
         query(cmd) {
             const run = async () => {
                 if (!App.writer) return '';
@@ -946,24 +956,26 @@
             const waveLogical = parseInt(Dom.value(config.waveId));
             const waveValue = channel === 1 ? waveLogical : (waveLogical < 5 ? waveLogical : waveLogical - 1);
 
-            await Serial.query(config.waveWrite + waveValue);
-            await Serial.query(config.ampWrite + Utils.fixed(Dom.value(config.ampId), 3));
-            await Serial.query(config.offWrite + Utils.fixed(Dom.value(config.offId), 3));
-            await Serial.query(config.dutyWrite + Utils.fixed(Dom.value(config.dutyId), 1));
-            await Serial.query(config.phaseWrite + Utils.fixed(Dom.value(config.phaseId), 1));
-            await Device.syncFromDevice();
+            // FY8300 setting commands do not return a reply. Avoid query()'s response timeout.
+            await Serial.send(config.waveWrite + waveValue);
+            await Serial.send(config.ampWrite + Utils.fixed(Dom.value(config.ampId), 3));
+            await Serial.send(config.offWrite + Utils.fixed(Dom.value(config.offId), 3));
+            await Serial.send(config.dutyWrite + Utils.fixed(Dom.value(config.dutyId), 1));
+            await Serial.send(config.phaseWrite + Utils.fixed(Dom.value(config.phaseId), 1));
+            UI.setStatus('Settings sent', 'ready');
+            await Device.syncChannel(channel);
         },
         async togglePower(channel) {
             const button = Dom.byId(ChannelConfig[channel].buttonId);
             const isOn = button.classList.contains('on-ch' + channel);
-            await Serial.query(ChannelConfig[channel].powerWrite + (isOn ? '0' : '1'));
+            await Serial.send(ChannelConfig[channel].powerWrite + (isOn ? '0' : '1'));
             UI.updatePower(channel, !isOn);
         },
         async adjustFrequency(channel, multiplier) {
             const channelState = App.state['ch' + channel];
             channelState.freq = Math.max(0, channelState.freq + (channelState.step * multiplier));
             UI.setChannelDisplay(channel, channelState.freq);
-            await Serial.query(ChannelConfig[channel].freqWrite + Utils.getDeviceFreqString(channelState.freq));
+            await Serial.send(ChannelConfig[channel].freqWrite + Utils.getDeviceFreqString(channelState.freq));
         },
         setStep(channel, stepValue, button) {
             App.state['ch' + channel].step = stepValue;
@@ -987,7 +999,7 @@
                     const notch = Math.max(1, Math.min(3, Math.round(Math.abs(event.deltaY) / 120)));
                     applyDelta((event.deltaY > 0 ? -1 : 1) * notch);
                     clearTimeout(knob._sendTimer);
-                    knob._sendTimer = setTimeout(() => Serial.query(ChannelConfig[channel].freqWrite + Utils.getDeviceFreqString(App.state['ch' + channel].freq)), 120);
+                    knob._sendTimer = setTimeout(() => Serial.send(ChannelConfig[channel].freqWrite + Utils.getDeviceFreqString(App.state['ch' + channel].freq)), 120);
                 }, { passive: false });
                 knob.addEventListener('pointerdown', event => {
                     App.knobDrag = { channel, lastY: event.clientY, moved: false };
@@ -1007,7 +1019,7 @@
                     if (!App.knobDrag || App.knobDrag.channel !== channel) return;
                     const moved = App.knobDrag.moved;
                     App.knobDrag = null;
-                    if (moved) await Serial.query(ChannelConfig[channel].freqWrite + Utils.getDeviceFreqString(App.state['ch' + channel].freq));
+                    if (moved) await Serial.send(ChannelConfig[channel].freqWrite + Utils.getDeviceFreqString(App.state['ch' + channel].freq));
                 };
                 knob.addEventListener('pointerup', finishDrag);
                 knob.addEventListener('pointercancel', finishDrag);
